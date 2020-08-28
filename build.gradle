@@ -1,0 +1,21 @@
+import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+
+plugins {
+    id 'org.jetbrains.kotlin.jvm' version '1.4.0'
+    id 'application'
+}
+group = 'com.n9mtq4'
+version = '1.0-SNAPSHOT'
+
+repositories {
+    mavenCentral()
+}
+dependencies {
+    testImplementation 'org.jetbrains.kotlin:kotlin-test-junit5'
+}
+tasks.withType(KotlinCompile) {
+    kotlinOptions.jvmTarget = '1.8'
+}
+application {
+    mainClassName = 'MainKt'
+}

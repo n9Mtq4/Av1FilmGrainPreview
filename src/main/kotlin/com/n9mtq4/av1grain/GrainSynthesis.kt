@@ -3,6 +3,7 @@ package com.n9mtq4.av1grain
 import AomFilmGrainT
 import IArray2D
 
+
 /**
  * Created by will on 8/17/20 at 3:12 PM.
  *
@@ -427,4 +428,325 @@ fun init_scaling_function(scaling_points: IArray2D, num_points: Int, scaling_lut
 	}
 	
 }
+
+fun scale_LUT(scaling_lut: IntArray, index: Int, bit_depth: Int): Int {
+	val x = index shr (bit_depth - 8)
+	
+	if ((bit_depth - 8) == 0 || x == 255) {
+		return scaling_lut[x]
+	}else {
+		return scaling_lut[x] + (((scaling_lut[x + 1] - scaling_lut[x]) * (index and ((1 shl (bit_depth - 8)) - 1)) + (1 shl (bit_depth - 9))) shr (bit_depth - 8))
+	}
+}
+
+fun add_noise_to_block(
+	params: AomFilmGrainT,
+	luma: IntArray,
+	cb: IntArray,
+	cr: IntArray,
+	luma_stride: Int,
+	chroma_stride: Int,
+	luma_grain: IntArray,
+	cb_grain: IntArray,
+	cr_grain: IntArray,
+	luma_grain_stride: Int,
+	chroma_grain_stride: Int,
+	half_luma_height: Int,
+	half_luma_width: Int,
+	bit_depth: Int,
+	chroma_subsamp_y: Int,
+	chroma_subsamp_x: Int,
+	mc_identity: Int
+) {
+	
+	var cb_mult = params.cb_mult - 128 // fixed scale
+	var cb_luma_mult = params.cb_luma_mult - 128 // fixed scale
+	var cb_offset = params.cb_offset - 256
+	
+	var cr_mult = params.cr_mult - 128
+	var cr_luma_mult = params.cr_luma_mult - 128
+	var cr_offset = params.cr_offset - 256
+	
+	val rounding_offset = (1 shl (params.scaling_shift - 1))
+	
+	val apply_y = if (params.num_y_points > 0) 1 else 0
+	val apply_cb = if (params.num_cb_points > 0 || params.chroma_scaling_from_luma != 0) 1 else 0
+	val apply_cr = if (params.num_cr_points > 0 || params.chroma_scaling_from_luma != 0) 1 else 0
+	
+	if (params.chroma_scaling_from_luma != 0) {
+		cb_mult = 0        // fixed scale
+		cb_luma_mult = 64  // fixed scale
+		cb_offset = 0
+		
+		cr_mult = 0        // fixed scale
+		cr_luma_mult = 64  // fixed scale
+		cr_offset = 0
+	}
+	
+	var min_luma: Int
+	var max_luma: Int
+	var min_chroma: Int
+	var max_chroma: Int
+	
+	if (params.clip_to_restricted_range != 0) {
+		min_luma = min_luma_legal_range
+		max_luma = max_luma_legal_range
+		
+		if (mc_identity != 0) {
+			min_chroma = min_luma_legal_range
+			max_chroma = max_luma_legal_range
+		} else {
+			min_chroma = min_chroma_legal_range;
+			max_chroma = max_chroma_legal_range;
+		}
+	} else {
+		min_luma = 0
+		min_chroma = 0
+		max_luma = 0
+		max_chroma = 255
+	}
+	
+	for (i in 0 until (half_luma_height shl (1 - chroma_subsamp_y))) {
+		for (j in 0 until (half_luma_width shl (1 - chroma_subsamp_x))) {
+			
+			var average_luma = 0
+			if (chroma_subsamp_x != 0) {
+				average_luma = luma[(i shl chroma_subsamp_y) * luma_stride +
+						(j shl chroma_subsamp_x)] +
+						luma[(i shl chroma_subsamp_y) * luma_stride +
+								(j shl chroma_subsamp_x) + 1] +
+						1 shr
+						1
+			} else {
+				average_luma = luma[(i shl chroma_subsamp_y) * luma_stride + j]
+			}
+			
+			if (apply_cb != 0) {
+				cb[i * chroma_stride + j] = clamp(
+					cb[i * chroma_stride + j] +
+							(scale_LUT(
+								scaling_lut_cb,
+								clamp(
+									(average_luma * cb_luma_mult +
+											cb_mult * cb[i * chroma_stride + j] shr
+											6) +
+											cb_offset,
+									0, (256 shl bit_depth - 8) - 1
+								),
+								8
+							) *
+									cb_grain[i * chroma_grain_stride + j] +
+									rounding_offset shr
+									params.scaling_shift),
+					min_chroma, max_chroma
+				)
+			}
+			
+			if (apply_cr != 0) {
+				cr[i * chroma_stride + j] = clamp(
+					cr[i * chroma_stride + j] +
+							(scale_LUT(
+								scaling_lut_cr,
+								clamp(
+									(average_luma * cr_luma_mult +
+											cr_mult * cr[i * chroma_stride + j] shr
+											6) +
+											cr_offset,
+									0, (256 shl bit_depth - 8) - 1
+								),
+								8
+							) *
+									cr_grain[i * chroma_grain_stride + j] +
+									rounding_offset shr
+									params.scaling_shift),
+					min_chroma, max_chroma
+				)
+			}
+			
+		}
+	}
+	
+	if (apply_y != 0) {
+		for (i in 0 until (half_luma_height shl 1)) {
+			for (j in 0 until (half_luma_width shl 1)) {
+				luma[i * luma_stride + j] = clamp(
+					luma[i * luma_stride + j] +
+							(scale_LUT(scaling_lut_y, luma[i * luma_stride + j], 8) *
+									luma_grain[i * luma_grain_stride + j] +
+									rounding_offset shr
+									params.scaling_shift),
+					min_luma, max_luma
+				)
+			}
+		}
+	}
+	
+}
+
+fun add_noise_to_block_hbd(
+	params: AomFilmGrainT,
+	luma: IntArray,
+	cb: IntArray,
+	cr: IntArray,
+	luma_stride: Int,
+	chroma_stride: Int,
+	luma_grain: IntArray,
+	cb_grain: IntArray,
+	cr_grain: IntArray,
+	luma_grain_stride: Int,
+	chroma_grain_stride: Int,
+	half_luma_height: Int,
+	half_luma_width: Int,
+	bit_depth: Int,
+	chroma_subsamp_y: Int,
+	chroma_subsamp_x: Int,
+	mc_identity: Int
+) {
+	
+	var cb_mult = params.cb_mult - 128 // fixed scale
+	
+	var cb_luma_mult = params.cb_luma_mult - 128 // fixed scale
+	
+	// offset value depends on the bit depth
+	// offset value depends on the bit depth
+	var cb_offset = (params.cb_offset shl bit_depth - 8) - (1 shl bit_depth)
+	
+	var cr_mult = params.cr_mult - 128 // fixed scale
+	
+	var cr_luma_mult = params.cr_luma_mult - 128 // fixed scale
+	
+	// offset value depends on the bit depth
+	// offset value depends on the bit depth
+	var cr_offset = (params.cr_offset shl bit_depth - 8) - (1 shl bit_depth)
+	
+	val rounding_offset = 1 shl params.scaling_shift - 1
+	
+	val apply_y = if (params.num_y_points > 0) 1 else 0
+	val apply_cb = if (params.num_cb_points > 0 || params.chroma_scaling_from_luma != 0) 1 else 0
+	val apply_cr = if (params.num_cr_points > 0 || params.chroma_scaling_from_luma != 0) 1 else 0
+	
+	if (params.chroma_scaling_from_luma != 0) {
+		cb_mult = 0 // fixed scale
+		cb_luma_mult = 64 // fixed scale
+		cb_offset = 0
+		cr_mult = 0 // fixed scale
+		cr_luma_mult = 64 // fixed scale
+		cr_offset = 0
+	}
+	
+	val min_luma: Int
+	val max_luma: Int
+	val min_chroma: Int
+	val max_chroma: Int
+	
+	if (params.clip_to_restricted_range != 0) {
+		min_luma = min_luma_legal_range shl bit_depth - 8
+		max_luma = max_luma_legal_range shl bit_depth - 8
+		if (mc_identity != 0) {
+			min_chroma = min_luma_legal_range shl bit_depth - 8
+			max_chroma = max_luma_legal_range shl bit_depth - 8
+		} else {
+			min_chroma = min_chroma_legal_range shl bit_depth - 8
+			max_chroma = max_chroma_legal_range shl bit_depth - 8
+		}
+	} else {
+		min_chroma = 0
+		min_luma = min_chroma
+		max_chroma = (256 shl bit_depth - 8) - 1
+		max_luma = max_chroma
+	}
+	
+	for (i in 0 until (half_luma_height shl 1 - chroma_subsamp_y)) {
+		for (j in 0 until (half_luma_width shl 1 - chroma_subsamp_x)) {
+			var average_luma = 0
+			average_luma = if (chroma_subsamp_x != 0) {
+				luma[(i shl chroma_subsamp_y) * luma_stride +
+						(j shl chroma_subsamp_x)] +
+						luma[(i shl chroma_subsamp_y) * luma_stride +
+								(j shl chroma_subsamp_x) + 1] +
+						1 shr
+						1
+			} else {
+				luma[(i shl chroma_subsamp_y) * luma_stride + j]
+			}
+			if (apply_cb != 0) {
+				cb[i * chroma_stride + j] = clamp(
+					cb[i * chroma_stride + j] +
+							(scale_LUT(
+								scaling_lut_cb,
+								clamp(
+									(average_luma * cb_luma_mult +
+											cb_mult * cb[i * chroma_stride + j] shr
+											6) +
+											cb_offset,
+									0, (256 shl bit_depth - 8) - 1
+								),
+								bit_depth
+							) *
+									cb_grain[i * chroma_grain_stride + j] +
+									rounding_offset shr
+									params.scaling_shift),
+					min_chroma, max_chroma
+				)
+			}
+			if (apply_cr != 0) {
+				cr[i * chroma_stride + j] = clamp(
+					cr[i * chroma_stride + j] +
+							(scale_LUT(
+								scaling_lut_cr,
+								clamp(
+									(average_luma * cr_luma_mult +
+											cr_mult * cr[i * chroma_stride + j] shr
+											6) +
+											cr_offset,
+									0, (256 shl bit_depth - 8) - 1
+								),
+								bit_depth
+							) *
+									cr_grain[i * chroma_grain_stride + j] +
+									rounding_offset shr
+									params.scaling_shift),
+					min_chroma, max_chroma
+				)
+			}
+		}
+	}
+	
+	if (apply_y != 0) {
+		for (i in 0 until (half_luma_height shl 1)) {
+			for (j in 0 until (half_luma_width shl 1)) {
+				luma[i * luma_stride + j] = clamp(
+					luma[i * luma_stride + j] +
+							(scale_LUT(
+								scaling_lut_y, luma[i * luma_stride + j],
+								bit_depth
+							) *
+									luma_grain[i * luma_grain_stride + j] +
+									rounding_offset shr
+									params.scaling_shift),
+					min_luma, max_luma
+				)
+			}
+		}
+	}
+	
+}
+
+fun copy_rect(src: IntArray, src_stride: Int, dst: IntArray, dst_stride: Int, width: Int, height: Int, use_high_bit_depth: Int) {
+	
+	val hbd_coeff = if (use_high_bit_depth != 0) 2 else 1
+	
+	var heightLoop = height
+	
+	var src_offset = 0
+	var dst_offset = 0
+	while (heightLoop != 0) {
+		memcpy(dst, src, width, dst_offset = dst_offset, src_offset = src_offset)
+		src_offset += src_stride // FIXME: probably assumes size of data
+		dst_offset += dst_stride
+		--heightLoop
+	}
+	
+}
+
 

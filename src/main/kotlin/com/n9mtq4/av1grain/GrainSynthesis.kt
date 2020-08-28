@@ -741,6 +741,7 @@ fun copy_rect(src: IntArray, src_stride: Int, dst: IntArray, dst_stride: Int, wi
 	var src_offset = 0
 	var dst_offset = 0
 	while (heightLoop != 0) {
+		// TODO: original uses hbd_coeff here
 		memcpy(dst, src, width, dst_offset = dst_offset, src_offset = src_offset)
 		src_offset += src_stride // FIXME: probably assumes size of data
 		dst_offset += dst_stride

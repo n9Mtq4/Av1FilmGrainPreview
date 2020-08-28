@@ -9,6 +9,7 @@ package com.n9mtq4.av1grain
  */
 
 fun clamp(v: Int, min: Int, max: Int) = v.coerceIn(min, max)
+fun iclip(v: Int, min: Int, max: Int) = clamp(v, min, max)
 
 fun memset(arr: IntArray, value: Int, size: Int) {
 	for (i in 0 until size) arr[i] = value

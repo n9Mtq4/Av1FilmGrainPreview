@@ -1,6 +1,7 @@
 import com.n9mtq4.av1grain.Dav1dFilmGrainData
 import com.n9mtq4.av1grain.gaussian_sequence
 import com.n9mtq4.av1grain.iclip
+import com.n9mtq4.av1grain.imin
 
 /**
  * Created by will on 8/17/20 at 5:07 PM.
@@ -16,6 +17,10 @@ const val BLOCK_SIZE = 32
 // hacks for preprocessor stuff
 const val bitdepth_max = 8
 fun bitdepth_from_max(x: Int) = 8
+
+// from include/common/bitdepth.h
+// for bd = 8
+fun PXSTRIDE(x: Int) = x
 
 // stuff from src/film_grain_tmpl.c
 const val SUB_GRAIN_WIDTH = 44
@@ -133,3 +138,273 @@ fun generate_grain_uv_c(buf: IArray2D, buf_y: IArray2D, data: Dav1dFilmGrainData
 	
 }
 
+fun sample_lut(grain_lut: IArray2D, offsets: IArray2D, subx: Int, suby: Int, bx: Int, by: Int, x: Int, y: Int): Int {
+	
+	val randval: Int = offsets[bx][by]
+	val offx = 3 + (2 shr subx) * (3 + (randval shr 4))
+	val offy = 3 + (2 shr suby) * (3 + (randval and 0xF))
+	return grain_lut[offy + y + (BLOCK_SIZE shr suby) * by][offx + x + (BLOCK_SIZE shr subx) * bx]
+	
+}
+
+fun fgy_32x32xn_c(
+	dst_row: IntArray,
+	src_row: IntArray,
+	stride: Int,
+	data: Dav1dFilmGrainData,
+	pw: Int,
+	scaling: IntArray,
+	grain_lut: IArray2D,
+	bh: Int,
+	row_num: Int
+) {
+	
+	var dst_row_ptr = 0
+	var src_row_ptr = 0
+	
+	val rows: Int = 1 + (if (((data.overlap_flag != 0) && row_num > 0)) 1 else 0)
+	val bitdepth_min_8 = bitdepth_from_max(bitdepth_max) - 8
+	val grain_ctr = 128 shl bitdepth_min_8
+	val grain_min = -grain_ctr
+	val grain_max = grain_ctr - 1
+	
+	val min_value: Int
+	val max_value: Int
+	if (data.clip_to_restricted_range != 0) {
+		min_value = 16 shl bitdepth_min_8
+		max_value = 235 shl bitdepth_min_8
+	} else {
+		min_value = 0
+		max_value = 0xff
+	}
+	
+	
+	val seed = intArrayOf(0, 0)
+	for (i in 0 until rows) {
+		seed[i] = data.seed
+		seed[i] = seed[i] xor ((row_num - i) * 37 + 178 and 0xFF shl 8)
+		seed[i] = seed[i] xor ((row_num - i) * 173 + 105 and 0xFF)
+	}
+	
+	// assert(stride % (BLOCK_SIZE * sizeof(pixel)) == 0);
+	
+	val offsets = arrayOf(intArrayOf(0, 0), intArrayOf(0, 0))
+	
+	for (bx in 0 until pw step BLOCK_SIZE) {
+		
+		val bw: Int = imin(BLOCK_SIZE, pw - bx)
+		
+		if ((data.overlap_flag != 0) && bx != 0) {
+			// shift previous offsets left
+			for (i in 0 until rows) offsets[1][i] = offsets[0][i]
+		}
+		
+		// update current offsets
+		for (i in 0 until rows) {
+			random_number_state = seed[i]
+			offsets[0][i] = get_random_number(8)
+			// offsets[0][i] = get_random_number(8, &seed[i]);
+		}
+		
+		// x/y block offsets to compensate for overlapped regions
+		// x/y block offsets to compensate for overlapped regions
+		val ystart = if ((data.overlap_flag != 0) && (row_num != 0)) imin(2, bh) else 0
+		val xstart = if ((data.overlap_flag != 0) && (bx != 0)) imin(2, bw) else 0
+		
+		val w = arrayOf(intArrayOf(27, 17), intArrayOf(17, 27))
+		
+		for (y in ystart until bh) {
+			// Non-overlapped image region (straightforward)
+			for (x in xstart until bw) {
+				val grain = sample_lut(grain_lut, offsets, 0, 0, 0, 0, x, y)
+				
+				// add_noise_y(x, y, grain)
+				val src = src_row_ptr + (y) * PXSTRIDE(stride) + (x) + bx
+				val dst = dst_row_ptr + (y) * PXSTRIDE(stride) + (x) + bx
+				val noise = round2(scaling[src_row[src]] * (grain), data.scaling_shift)
+				dst_row[dst] = iclip(src_row[src_row_ptr] + noise, min_value, max_value)
+				
+			}
+			
+			// Special case for overlapped column
+			for (x in 0 until xstart) {
+				var grain = sample_lut(grain_lut, offsets, 0, 0, 0, 0, x, y)
+				val old = sample_lut(grain_lut, offsets, 0, 0, 1, 0, x, y)
+				grain = round2(old * w[x][0] + grain * w[x][1], 5)
+				grain = iclip(grain, grain_min, grain_max)
+				
+				// add_noise_y(x, y, grain)
+				val src = src_row_ptr + (y) * PXSTRIDE(stride) + (x) + bx
+				val dst = dst_row_ptr + (y) * PXSTRIDE(stride) + (x) + bx
+				val noise = round2(scaling[src_row[src]] * (grain), data.scaling_shift)
+				dst_row[dst] = iclip(src_row[src_row_ptr] + noise, min_value, max_value)
+				
+			}
+		}
+		
+		
+		for (y in 0 until ystart) {
+			// Special case for overlapped row (sans corner)
+			for (x in xstart until bw) {
+				var grain = sample_lut(grain_lut, offsets, 0, 0, 0, 0, x, y)
+				val old = sample_lut(grain_lut, offsets, 0, 0, 0, 1, x, y)
+				grain = round2(old * w[y][0] + grain * w[y][1], 5)
+				grain = iclip(grain, grain_min, grain_max)
+				
+				// add_noise_y(x, y, grain)
+				val src = src_row_ptr + (y) * PXSTRIDE(stride) + (x) + bx
+				val dst = dst_row_ptr + (y) * PXSTRIDE(stride) + (x) + bx
+				val noise = round2(scaling[src_row[src]] * (grain), data.scaling_shift)
+				dst_row[dst] = iclip(src_row[src_row_ptr] + noise, min_value, max_value)
+				
+			}
+			
+			// Special case for doubly-overlapped corner
+			for (x in 0 until xstart) {
+				// Blend the top pixel with the top left block
+				var top = sample_lut(grain_lut, offsets, 0, 0, 0, 1, x, y)
+				var old = sample_lut(grain_lut, offsets, 0, 0, 1, 1, x, y)
+				top = round2(old * w[x][0] + top * w[x][1], 5)
+				top = iclip(top, grain_min, grain_max)
+				
+				// Blend the current pixel with the left block
+				var grain = sample_lut(grain_lut, offsets, 0, 0, 0, 0, x, y)
+				old = sample_lut(grain_lut, offsets, 0, 0, 1, 0, x, y)
+				grain = round2(old * w[x][0] + grain * w[x][1], 5)
+				grain = iclip(grain, grain_min, grain_max)
+				
+				// Mix the row rows together and apply grain
+				grain = round2(top * w[y][0] + grain * w[y][1], 5)
+				grain = iclip(grain, grain_min, grain_max)
+				
+				// add_noise_y(x, y, grain)
+				val src = src_row_ptr + (y) * PXSTRIDE(stride) + (x) + bx
+				val dst = dst_row_ptr + (y) * PXSTRIDE(stride) + (x) + bx
+				val noise = round2(scaling[src_row[src]] * (grain), data.scaling_shift)
+				dst_row[dst] = iclip(src_row[src_row_ptr] + noise, min_value, max_value)
+				
+			}
+		}
+		
+	}
+	
+}
+
+fun fguv_32x32xn_c(
+	dst_row: IntArray,
+	src_row: IntArray,
+	stride: Int,
+	data: Dav1dFilmGrainData,
+	pw: Int,
+	scaling: IntArray,
+	grain_lut: IArray2D,
+	bh: Int,
+	row_num: Int,
+	luma_row: IntArray,
+	luma_stride: Int,
+	uv: Int,
+	is_id: Int,
+	sx: Int,
+	sy: Int
+) {
+	
+	val rows: Int = 1 + (if (((data.overlap_flag != 0) && row_num > 0)) 1 else 0)
+	val bitdepth_min_8 = bitdepth_from_max(bitdepth_max) - 8
+	val grain_ctr = 128 shl bitdepth_min_8
+	val grain_min = -grain_ctr
+	val grain_max = grain_ctr - 1
+	
+	val min_value: Int
+	val max_value: Int
+	if (data.clip_to_restricted_range != 0) {
+		min_value = 16 shl bitdepth_min_8
+		max_value = (if (is_id != 0) 235 else 240) shl bitdepth_min_8
+	} else {
+		min_value = 0
+		max_value = 0xff
+	}
+	
+	val seed = intArrayOf(0, 0)
+	for (i in 0 until rows) {
+		seed[i] = data.seed
+		seed[i] = seed[i] xor ((row_num - i) * 37 + 178 and 0xFF shl 8)
+		seed[i] = seed[i] xor ((row_num - i) * 173 + 105 and 0xFF)
+	}
+	
+	val offsets = arrayOf(intArrayOf(0, 0), intArrayOf(0, 0))
+	
+	for (bx in 0 until pw step (BLOCK_SIZE shr sx)) {
+		val bw = imin(BLOCK_SIZE shr sx, pw - bx)
+		if ((data.overlap_flag != 0) && (bx != 0)) {
+			// shift previous offsets left
+			for (i in 0 until rows) offsets[1][i] = offsets[0][i]
+		}
+		
+		// update current offsets
+		// update current offsets
+		for (i in 0 until rows) {
+			random_number_state = seed[i]
+			offsets[0][i] = get_random_number(8)
+			// offsets[0][i] = get_random_number(8, &seed[i]);
+		}
+		
+		// x/y block offsets to compensate for overlapped regions
+		val ystart = if ((data.overlap_flag != 0) && (row_num != 0)) imin(2 shr sy, bh) else 0
+		val xstart = if ((data.overlap_flag != 0) && (bx != 0)) imin(2 shr sx, bw) else 0
+		
+		val w = arrayOf(
+			arrayOf(arrayOf(27, 17), arrayOf(17, 27)),
+			arrayOf(arrayOf(23, 22))
+		)
+		
+		for (y in ystart until bh) {
+			// Non-overlapped image region (straightforward)
+			for (x in xstart until bw) {
+				val grain = sample_lut(grain_lut, offsets, sx, sy, 0, 0, x, y)
+				add_noise_uv(x, y, grain)
+			}
+			
+			// Special case for overlapped column
+			for (x in 0 until xstart) {
+				var grain = sample_lut(grain_lut, offsets, sx, sy, 0, 0, x, y)
+				val old = sample_lut(grain_lut, offsets, sx, sy, 1, 0, x, y)
+				grain = old * w[sx][x][0] + grain * w[sx][x][1] + 16 shr 5
+				grain = iclip(grain, grain_min, grain_max)
+				add_noise_uv(x, y, grain)
+			}
+		}
+		
+		for (y in 0 until ystart) {
+			// Special case for overlapped row (sans corner)
+			for (x in xstart until bw) {
+				var grain = sample_lut(grain_lut, offsets, sx, sy, 0, 0, x, y)
+				val old = sample_lut(grain_lut, offsets, sx, sy, 0, 1, x, y)
+				grain = old * w[sy][y][0] + grain * w[sy][y][1] + 16 shr 5
+				grain = iclip(grain, grain_min, grain_max)
+				add_noise_uv(x, y, grain)
+			}
+			
+			// Special case for doubly-overlapped corner
+			for (x in 0 until xstart) {
+				// Blend the top pixel with the top left block
+				var top = sample_lut(grain_lut, offsets, sx, sy, 0, 1, x, y)
+				var old = sample_lut(grain_lut, offsets, sx, sy, 1, 1, x, y)
+				top = old * w[sx][x][0] + top * w[sx][x][1] + 16 shr 5
+				top = iclip(top, grain_min, grain_max)
+				
+				// Blend the current pixel with the left block
+				var grain = sample_lut(grain_lut, offsets, sx, sy, 0, 0, x, y)
+				old = sample_lut(grain_lut, offsets, sx, sy, 1, 0, x, y)
+				grain = old * w[sx][x][0] + grain * w[sx][x][1] + 16 shr 5
+				grain = iclip(grain, grain_min, grain_max)
+				
+				// Mix the row rows together and apply to image
+				grain = top * w[sy][y][0] + grain * w[sy][y][1] + 16 shr 5
+				grain = iclip(grain, grain_min, grain_max)
+				add_noise_uv(x, y, grain)
+			}
+		}
+		
+	}
+	
+}

@@ -1,5 +1,7 @@
 package com.n9mtq4.av1grain
 
+import kotlin.math.min
+
 /**
  * Created by will on 8/17/20 at 4:45 PM.
  * 
@@ -10,6 +12,8 @@ package com.n9mtq4.av1grain
 
 fun clamp(v: Int, min: Int, max: Int) = v.coerceIn(min, max)
 fun iclip(v: Int, min: Int, max: Int) = clamp(v, min, max)
+
+fun imin(a: Int, b: Int) = min(a, b)
 
 fun memset(arr: IntArray, value: Int, size: Int) {
 	for (i in 0 until size) arr[i] = value

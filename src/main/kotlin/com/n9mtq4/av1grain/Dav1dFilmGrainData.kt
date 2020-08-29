@@ -22,7 +22,7 @@ class Dav1dFilmGrainData {
 	val uv_mult = IntArray(2) { 0 }
 	val uv_luma_mult = IntArray(2) { 0 }
 	val uv_offset = IntArray(2) { 0 }
-	val overlap_flat: Int = 0
+	val overlap_flag: Int = 0
 	val clip_to_restricted_range: Int = 0
 	
 }

@@ -7,7 +7,7 @@ package com.n9mtq4.av1grain
  */
 class Dav1dFilmGrainData {
 	
-	var seed: Int = 0
+	var seed: Int = 1234
 	var num_y_points: Int = 0
 	var y_points = Array(14) { IntArray(2) { 0 } }
 	var chroma_scaling_from_luma = 0

@@ -10,7 +10,7 @@ import com.n9mtq4.av1grain.*
 const val GRAIN_WIDTH = 82
 const val GRAIN_HEIGHT = 73
 const val BLOCK_SIZE = 32
-const val SCALING_SIZE = 255
+const val SCALING_SIZE = 256
 
 // hacks for preprocessor stuff
 const val bitdepth_max = 8
@@ -285,6 +285,8 @@ fun fgy_32x32xn_c(
 		}
 		
 	}
+	
+	println("row done")
 	
 }
 

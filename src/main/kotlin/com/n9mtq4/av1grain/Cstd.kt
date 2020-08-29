@@ -12,6 +12,7 @@ import kotlin.math.min
 
 fun clamp(v: Int, min: Int, max: Int) = v.coerceIn(min, max)
 fun iclip(v: Int, min: Int, max: Int) = clamp(v, min, max)
+fun iclip_pixel(v: Int) = clamp(v, 0, 255)
 
 fun imin(a: Int, b: Int) = min(a, b)
 

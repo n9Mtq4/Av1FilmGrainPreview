@@ -1,7 +1,4 @@
-import com.n9mtq4.av1grain.Dav1dFilmGrainData
-import com.n9mtq4.av1grain.gaussian_sequence
-import com.n9mtq4.av1grain.iclip
-import com.n9mtq4.av1grain.imin
+import com.n9mtq4.av1grain.*
 
 /**
  * Created by will on 8/17/20 at 5:07 PM.
@@ -13,6 +10,7 @@ import com.n9mtq4.av1grain.imin
 const val GRAIN_WIDTH = 82
 const val GRAIN_HEIGHT = 73
 const val BLOCK_SIZE = 32
+const val SCALING_SIZE = 255
 
 // hacks for preprocessor stuff
 const val bitdepth_max = 8
@@ -52,7 +50,7 @@ fun generate_grain_y_c(buf: IArray2D, data: Dav1dFilmGrainData) {
 	for (y in 0 until GRAIN_HEIGHT) {
 		for (x in 0 until GRAIN_WIDTH) {
 			val value = get_random_number(11 /*, &seed*/)
-			buf[y][x] = round2(gaussian_sequence.get(value), shift)
+			buf[y][x] = round2(gaussian_sequence[value], shift)
 		}
 	}
 	
@@ -361,7 +359,23 @@ fun fguv_32x32xn_c(
 			// Non-overlapped image region (straightforward)
 			for (x in xstart until bw) {
 				val grain = sample_lut(grain_lut, offsets, sx, sy, 0, 0, x, y)
-				add_noise_uv(x, y, grain)
+				
+				// add_noise_uv(x, y, grain)
+				val lx = (bx + x) shl sx
+				val ly = y shl sy
+				val luma_ptr = ly * PXSTRIDE(luma_stride) + lx
+				var avg: Int = luma_row[luma_ptr + 0]
+				if (sx != 0) avg = avg + luma_row[luma_ptr + 1] + 1 shr 1
+				val src_ptr = y * PXSTRIDE(stride) + (bx + x)
+				val dst_ptr = y * PXSTRIDE(stride) + (bx + x)
+				var pval = avg
+				if (data.chroma_scaling_from_luma == 0) {
+					val combined = avg * data.uv_luma_mult[uv] + src_row[src_ptr] * data.uv_mult[uv]
+					pval = iclip_pixel((combined shr 6) + data.uv_offset[uv] * (1 shl bitdepth_min_8))
+				}
+				val noise = round2(scaling[pval] * grain, data.scaling_shift)
+				dst_row[dst_ptr] = iclip(src_row[src_ptr] + noise, min_value, max_value)
+				
 			}
 			
 			// Special case for overlapped column
@@ -370,7 +384,23 @@ fun fguv_32x32xn_c(
 				val old = sample_lut(grain_lut, offsets, sx, sy, 1, 0, x, y)
 				grain = old * w[sx][x][0] + grain * w[sx][x][1] + 16 shr 5
 				grain = iclip(grain, grain_min, grain_max)
-				add_noise_uv(x, y, grain)
+				
+				// add_noise_uv(x, y, grain)
+				val lx = (bx + x) shl sx
+				val ly = y shl sy
+				val luma_ptr = ly * PXSTRIDE(luma_stride) + lx
+				var avg: Int = luma_row[luma_ptr + 0]
+				if (sx != 0) avg = avg + luma_row[luma_ptr + 1] + 1 shr 1
+				val src_ptr = y * PXSTRIDE(stride) + (bx + x)
+				val dst_ptr = y * PXSTRIDE(stride) + (bx + x)
+				var pval = avg
+				if (data.chroma_scaling_from_luma == 0) {
+					val combined = avg * data.uv_luma_mult[uv] + src_row[src_ptr] * data.uv_mult[uv]
+					pval = iclip_pixel((combined shr 6) + data.uv_offset[uv] * (1 shl bitdepth_min_8))
+				}
+				val noise = round2(scaling[pval] * grain, data.scaling_shift)
+				dst_row[dst_ptr] = iclip(src_row[src_ptr] + noise, min_value, max_value)
+				
 			}
 		}
 		
@@ -381,7 +411,23 @@ fun fguv_32x32xn_c(
 				val old = sample_lut(grain_lut, offsets, sx, sy, 0, 1, x, y)
 				grain = old * w[sy][y][0] + grain * w[sy][y][1] + 16 shr 5
 				grain = iclip(grain, grain_min, grain_max)
-				add_noise_uv(x, y, grain)
+				
+				// add_noise_uv(x, y, grain)
+				val lx = (bx + x) shl sx
+				val ly = y shl sy
+				val luma_ptr = ly * PXSTRIDE(luma_stride) + lx
+				var avg: Int = luma_row[luma_ptr + 0]
+				if (sx != 0) avg = avg + luma_row[luma_ptr + 1] + 1 shr 1
+				val src_ptr = y * PXSTRIDE(stride) + (bx + x)
+				val dst_ptr = y * PXSTRIDE(stride) + (bx + x)
+				var pval = avg
+				if (data.chroma_scaling_from_luma == 0) {
+					val combined = avg * data.uv_luma_mult[uv] + src_row[src_ptr] * data.uv_mult[uv]
+					pval = iclip_pixel((combined shr 6) + data.uv_offset[uv] * (1 shl bitdepth_min_8))
+				}
+				val noise = round2(scaling[pval] * grain, data.scaling_shift)
+				dst_row[dst_ptr] = iclip(src_row[src_ptr] + noise, min_value, max_value)
+				
 			}
 			
 			// Special case for doubly-overlapped corner
@@ -401,10 +447,59 @@ fun fguv_32x32xn_c(
 				// Mix the row rows together and apply to image
 				grain = top * w[sy][y][0] + grain * w[sy][y][1] + 16 shr 5
 				grain = iclip(grain, grain_min, grain_max)
-				add_noise_uv(x, y, grain)
+				
+				// add_noise_uv(x, y, grain)
+				val lx = (bx + x) shl sx
+				val ly = y shl sy
+				val luma_ptr = ly * PXSTRIDE(luma_stride) + lx
+				var avg: Int = luma_row[luma_ptr + 0]
+				if (sx != 0) avg = avg + luma_row[luma_ptr + 1] + 1 shr 1
+				val src_ptr = y * PXSTRIDE(stride) + (bx + x)
+				val dst_ptr = y * PXSTRIDE(stride) + (bx + x)
+				var pval = avg
+				if (data.chroma_scaling_from_luma == 0) {
+					val combined = avg * data.uv_luma_mult[uv] + src_row[src_ptr] * data.uv_mult[uv]
+					pval = iclip_pixel((combined shr 6) + data.uv_offset[uv] * (1 shl bitdepth_min_8))
+				}
+				val noise = round2(scaling[pval] * grain, data.scaling_shift)
+				dst_row[dst_ptr] = iclip(src_row[src_ptr] + noise, min_value, max_value)
+				
 			}
 		}
 		
+	}
+	
+}
+
+
+fun generate_scaling(bitdepth: Int, points: IArray2D, num: Int, scaling: IntArray) {
+	
+	val shift_x = 0
+	val scaling_size = 1 shl bitdepth
+	
+	// Fill up the preceding entries with the initial value
+	for (i in 0 until (points[0][0] shl shift_x)) {
+		scaling[i] = points[0][1]
+	}
+	
+	// Linearly interpolate the values in the middle
+	for (i in 0 until num - 1) {
+		val bx = points[i][0]
+		val by = points[i][1]
+		val ex = points[i + 1][0]
+		val ey = points[i + 1][1]
+		val dx = ex - bx
+		val dy = ey - by
+		val delta = dy * ((0x10000 + (dx shr 1)) / dx)
+		for (x in 0 until dx) {
+			val v = by + (x * delta + 0x8000 shr 16)
+			scaling[bx + x shl shift_x] = v
+		}
+	}
+	
+	// Fill up the remaining entries with the final value
+	for (i in (points[num - 1][0] shl shift_x) until scaling_size) {
+		scaling[i] = points[num - 1][1]
 	}
 	
 }

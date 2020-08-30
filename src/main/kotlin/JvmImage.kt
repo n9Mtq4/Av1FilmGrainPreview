@@ -7,7 +7,7 @@ import java.awt.image.BufferedImage
  * @author Will "n9Mtq4" Bresnahan
  */
 
-fun createImg(yr: IArray2D, u: IArray2D, v: IArray2D): BufferedImage {
+fun createImg(yr: IArray2D, u: IArray2D, v: IArray2D, ss: Int = 2): BufferedImage {
 	
 	val width = yr.size
 	val height = yr[0].size
@@ -16,10 +16,9 @@ fun createImg(yr: IArray2D, u: IArray2D, v: IArray2D): BufferedImage {
 	for (y in 0 until height) {
 		for (x in 0 until width) {
 			val yp = yr[x][y]
-			val up = u[x / 2][y / 2]
-			val vp = v[x / 2][y / 2]
+			val up = u[x / ss][y / ss]
+			val vp = v[x / ss][y / ss]
 			val (r, g, b) = yuv2rgb(yp, up, vp)
-			println("$r, $g, $b")
 			val rgb = Color(r, g, b).rgb
 			img.setRGB(x, y, rgb)
 		}
@@ -40,10 +39,10 @@ fun extractRasterY(img: BufferedImage): IArray2D {
 	
 }
 
-fun extractRasterU(img: BufferedImage): IArray2D {
+fun extractRasterU(img: BufferedImage, ss: Int = 2): IArray2D {
 	
-	val uRaster = Array(img.width / 2) { c -> IntArray(img.height / 2) { r ->
-		val color = Color(img.getRGB(2 * c, 2 * r))
+	val uRaster = Array(img.width / ss) { c -> IntArray(img.height / ss) { r ->
+		val color = Color(img.getRGB(ss * c, ss * r))
 		val (_, u, _) = rgb2yuv(color.red, color.green, color.blue)
 		u.toInt()
 	} }
@@ -51,10 +50,10 @@ fun extractRasterU(img: BufferedImage): IArray2D {
 	
 }
 
-fun extractRasterV(img: BufferedImage): IArray2D {
+fun extractRasterV(img: BufferedImage, ss: Int = 2): IArray2D {
 	
-	val vRaster = Array(img.width / 2) { c -> IntArray(img.height / 2) { r ->
-		val color = Color(img.getRGB(2 * c, 2 * r))
+	val vRaster = Array(img.width / ss) { c -> IntArray(img.height / ss) { r ->
+		val color = Color(img.getRGB(ss * c, ss * r))
 		val (_, _, v) = rgb2yuv(color.red, color.green, color.blue)
 		v.toInt()
 	} }

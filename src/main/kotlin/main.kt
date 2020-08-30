@@ -10,6 +10,8 @@ fun main(args: Array<String>) {
 	
 	val img = BufferedImage(pictureWidth, pictureHeight, BufferedImage.TYPE_INT_RGB)
 	
+	img.setRGB(0, 0, pictureWidth, pictureHeight, IntArray(pictureWidth * pictureHeight) { Color(255 / 2, 255 / 2, 255 / 2).rgb }, 0, 1)
+	
 	// configure grain info
 	val data = Dav1dFilmGrainData()
 	data.ar_coeff_lag = 3
@@ -34,8 +36,13 @@ fun main(args: Array<String>) {
 	data.y_points[5] = intArrayOf(255, 32)
 	
 	// create image raster
-	val imgRaster = Array(pictureWidth) { IntArray(pictureHeight) { 255 / 2 } }
-	val srcImgRaster = imgRaster.copyOf()
+	val srcYRaster = extractRasterY(img)
+	val srcURaster = extractRasterU(img)
+	val srcVRaster = extractRasterV(img)
+	
+	val dstYRaster = srcYRaster.copyOf()
+	val dstURaster = srcURaster.copyOf()
+	val dstVRaster = srcVRaster.copyOf()
 	
 	// compute lut
 	val grainLut = Array(3) { Array(GRAIN_HEIGHT + 1) { IntArray(GRAIN_WIDTH) { 0 } } }
@@ -57,7 +64,7 @@ fun main(args: Array<String>) {
 		val luma_src = IntArray(pictureWidth * BLOCK_SIZE)
 		for (i in 0 until BLOCK_SIZE) {
 			for (j in 0 until pictureWidth) {
-				luma_src[i * pictureWidth + j] = srcImgRaster[row * BLOCK_SIZE + i][j]
+				luma_src[i * pictureWidth + j] = srcYRaster[row * BLOCK_SIZE + i][j]
 			}
 		}
 		val luma_dst = IntArray(pictureWidth * BLOCK_SIZE) { 255 }
@@ -69,21 +76,41 @@ fun main(args: Array<String>) {
 		
 		for (i in 0 until BLOCK_SIZE) {
 			for (j in 0 until pictureWidth) {
-				imgRaster[row * BLOCK_SIZE + i][j] = luma_dst[i * pictureWidth + j]
+				dstYRaster[row * BLOCK_SIZE + i][j] = luma_dst[i * pictureWidth + j]
 			}
 		}
 		
 	}
 	
 	// load pixels from yuv into buffered image
-	for (y in 0 until pictureHeight) {
-		for (x in 0 until pictureWidth) {
-			val grey = imgRaster[x][y]
-			val color = Color(grey, grey, grey)
-			img.setRGB(x, y, color.rgb)
-		}
-	}
+	val newImg = createImg(dstYRaster, dstURaster, dstVRaster)
 	
 	println("done")
 	
+}
+
+fun rgb2yuv(R: Int, G: Int, B: Int): Triple<Int, Int, Int> {
+	// https://gist.github.com/yohhoy/dafa5a47dade85d8b40625261af3776a
+	val a = 0.2126
+	val b = 0.7152
+	val c = 0.0722
+	val d = 1.8556
+	val e = 1.5748
+	val Y  = a * R + b * G + c * B
+	val Cb = (B - Y) / d
+	val Cr = (R - Y) / e
+	return Triple(Y.toInt(), Cb.toInt(), Cr.toInt())
+}
+
+fun yuv2rgb(Y: Int, Cb: Int, Cr: Int): Triple<Int, Int, Int> {
+	// https://gist.github.com/yohhoy/dafa5a47dade85d8b40625261af3776a
+	val a = 0.2126
+	val b = 0.7152
+	val c = 0.0722
+	val d = 1.8556
+	val e = 1.5748
+	val R = Y + e * Cr
+	val G = Y - (a * e / b) * Cr - (c * d / b) * Cb
+	val B = Y + d * Cb
+	return Triple(R.toInt().coerceIn(0, 255), G.toInt().coerceIn(0, 255), B.toInt().coerceIn(0, 255))
 }
